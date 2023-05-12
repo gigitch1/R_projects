@@ -1,0 +1,316 @@
+---
+title: "Airbnb_final"
+output: html_document
+date: '2022-06-22'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Getting the data 
+Go into the open File command and select the file containing the AirBnB dta, it will be charged into the local environment.
+
+By setting the working directory, we will tell R where to get all the info
+
+```{r}
+setwd("C:/Users/evako/Documents/DSTI/10_RData Processing/Project")
+airbnb <- load('AirBnB.RData')
+```
+
+Let's have a look at the dataset.Categorical data are stored in a factor. x est l'ensemble des données levels= vector de toutes les valeurs possibles Par défaut, c'est la liste de toutes les valeurs prises par X
+
+First we need to install the packages and libraries we will be using in this notebook.
+```{r}
+#install.packages(c("ggplot2","dplyr","tidyr", "stringr", "lubridate"))
+```
+Now we can group all the packages/libraries into a single vector, that will make loading them all much easier at once. 
+```{r}
+my_packages <- c("ggplot2","dplyr","tidyr", "stringr", "lubridate")
+```
+
+Now we can load the corresponding libraries at once with this code:
+```{r}
+lapply(my_packages,require,character.only = TRUE)
+```
+
+# Metrics
+
+## Number of apartments per owner
+
+Starting here with the L dataset,we want to aggregate the number of apartments for each property owner.
+We are going to create a subset of all listings with their corresponding host_id, ordering the subset according to the host_id number.
+
+We are going to use the aggregate function to group all listings by host_id. 
+```{r}
+G <- aggregate(cbind(Count,L$id) ~ L$host_id, transform(L, Count = 1), sum)
+G <-arrange(G[1:2],desc(G[2])) # sort the table according to the second column which is the number of listings
+```
+ 
+ Unfortunately, this solution gives us a very very long list of data that is very hard to read, so the code below can help us group the data. With this, we get to know how many listings each owner has.  So, we have 41.562 owners who have 1 apartment listed and 35 who have 6 apartments listed.  
+```{r}
+G_agg <- aggregate(x=G$`L$host_id`, by=list(G$Count), FUN = length)
+head(G_agg)
+```
+
+This grouping tells us how many apartments belongs to each host. The list is longer than the previous code, since we are listing all the owners, more than 41.000 persons. 
+```{r}
+Q1 <-aggregate(L$id, by=list(L$host_id), FUN = length)
+head(Q1)
+```
+ 
+ 
+We can now use a filter function to check directly in the dataframe L, if the grouping is correct, for example getting the list of all listings belonging to a certain host_id. 
+```{r}
+out = filter(L,host_id == "3971743")
+```
+
+As a visual, we could use a histogram to present the data.
+```{r}
+count = sort(table(L$host_id), decreasing=TRUE)
+barplot(count)
+```
+However, it is not easy to read. We could make it in the shiny app and filter by zipcode.
+
+```{r}
+unique(L$zipcode)
+```
+This code shows us all the zipcodes used in the L dataframe
+```{r}
+head(unique(L$city))
+```
+
+We can see that those 2 columns need to be cleaned as the data is a little bit messy. 
+First, we could add in L a new column to distinguish if the listing is within Paris or in the suburbs. 
+First we will select all 5 characters zipcodes. 
+Then those starting with 75 will be assigned Paris as value, all the others will be marked as Suburbs
+
+```{r}
+city_code = substr(L$zipcode,1,2)
+L <- mutate(L,agglo = case_when( 
+                                (str_length(zipcode)== 5) & (city_code =="75") ~ "Paris",
+                                (str_length(zipcode)== 5) & (city_code %in% c("77", "78","91","92","93","94","95")) ~ "Suburbs",
+                                str_length(zipcode)== 0 ~ "No zipcode",
+                                TRUE ~ "Autre")
+            )
+```
+
+Then, for those that have no zipcode, we can use a reverse geocoding library to identify the street and zipcode. 
+```{r}
+zipfind <- select(L, id, latitude, longitude, zipcode, agglo)
+zipfind <- filter(zipfind, agglo== "No zipcode")
+head(zipfind)
+```
+
+A second visual could be to view the data on a map with the latitude and longitude of the data
+pour cela, nous allons utiliser la librairie tidygeocoder.
+
+```{r}
+#install.packages('tidygeocoder')
+library(tidygeocoder)
+```
+```{r}
+#reverse_geo(lat=zipfind$latitude, long=zipfind$longitude, method='osm', full_results = TRUE)
+```
+Now we can tie back those postcodes into the zipcode of the dataframe L to visualize where each listing is located.
+
+Now, let's find a way to create a visual giving for each host_id, the list of the listings and putting them on a map.
+
+(do it with leaflet)
+
+## Renting price per city quarter
+
+The renting price for each listing is expressed as factor in the dataset L, so the first thing is to turn it into a numeric field/column to be able to make any calculations with it. 
+
+Transformation and creation of a new variable called "new_price"
+```{r}
+L = mutate(L,new_price=as.numeric(gsub("[$,]","",L$price))) 
+```
+
+Creation of a subset of L, named L1 with just the renting price information for flats within Paris. 
+```{r}
+L1 <- select(L,id,zipcode, agglo, price, new_price)
+L1 <- filter(L1, agglo == "Paris")
+head(L1)
+```
+Now we are going to aggregate the average renting price per quarter (ie. within Paris, that is why we have filtered the data to only the price for Paris)
+
+```{r}
+L2 <- aggregate(new_price ~ zipcode, data = L1,mean)
+```
+
+We are going to need the forcats package/library, that is going to help us work with categorical variables 
+
+```{r}
+#install.packages("forcats")
+library(forcats)
+```
+Now we can create a barplot with all the information we need
+
+```{r}
+ggplot(data=L2, aes(x=fct_reorder(zipcode,new_price), y=new_price, fill=new_price))+
+  geom_bar(stat="identity", fill= "#54c3f3")+
+  coord_flip()+
+  theme_bw()+ ylab("Average renting price")+
+  xlab("Arrondissement")+
+  geom_text(aes(label=round(new_price, digits=0)), vjust=0.5, hjust=1.5, color="white", size=3.5)
+```
+It would also be interesting to see the renting price distribution instead of just an average and see if it makes the ranking more interesting, with a boxplot visual:
+
+
+```{r}
+b_L2 <- filter(L1, new_price <=250)
+ggplot(data=b_L2, aes(x=fct_reorder(zipcode,new_price), y=new_price, fill=new_price))+geom_boxplot()+coord_flip()
+```
+
+
+Let's try to do the same with Suburban listings:
+```{r}
+L1bis <- select(L,id,zipcode, zipcode, agglo, price, new_price)
+L1bis <- filter(L1bis, agglo == "Suburbs")
+head(L1bis)
+```
+```{r}
+L2bis <- aggregate(new_price ~ zipcode, data = L1bis,mean)
+```
+
+Now see the same barplot with the suburban zipcodes
+```{r}
+ggplot(data=L2bis, aes(x=fct_reorder(zipcode,new_price), y=new_price, fill=new_price))+
+  geom_bar(stat="identity", fill= "#FF0000")+
+  coord_flip()+
+  theme_bw()+ ylab("Average renting price")+
+  xlab("Ville Banlieue")+
+  geom_text(aes(label=round(new_price, digits=0)), vjust=0.5, hjust=1.5, color="white", size=3.5)
+```
+```{r}
+b_L2bis <- filter(L1bis, new_price <=150)
+ggplot(data=b_L2bis, aes(x=fct_reorder(zipcode,new_price), y=new_price, fill=new_price))+geom_boxplot()+coord_flip()
+```
+with the smart_location variable, it has not been cleaned, so we should be using another one, we will look into another variable mmore interesting
+
+
+## Visit frequency of listings over time
+To figure out the frequency of visits over time, we are going to work with dates, hence the loding of the lubridate package earlier in the document. 
+For this question, we are going to use both dataframes, L and R joining them over the listing id. The L dataframe lists all the listings and their characteristics and the R dataframe lists the visits dates of all listings since 2010 until 2016. 
+
+We are first going to transform the class of the date variable in R. 
+```{r}
+class(R$date)
+```
+ To be able to work with this variable, it needs to be of a date class. 
+ That is what we are going to do now:
+```{r}
+R$new_date <- ymd(R$date)
+```
+
+now let's see how this transformation worked out:
+```{r}
+class(R$new_date)
+head(R)
+```
+To avoid getting a table/dataframe that is too big, we are going to use the L1 dataframe, to see the frequency of visits the agglo/suburbs and join it with R. 
+
+We can see that the listing_id is not named the same in the 2 tables, so we are going to change it first
+L and L0 do not have the same dimensions, why is that?
+
+```{r}
+L0 <- select(L,id,zipcode, agglo, price, new_price)
+L0 <- filter(L0,agglo %in% c("Paris", "Suburbs"))
+L0 <- rename(L0,"listing_id"="id")
+```
+
+```{r}
+Q <-inner_join(L0, R, by = "listing_id")
+```
+```{r}
+class(Q$new_date)
+```
+```{r}
+ggplot(data = Q, aes(x=new_date))+geom_histogram()+
+  scale_x_date(date_labels="%Y") + facet_wrap(~ zipcode, scales ="free" )+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+```{r}
+#ggplot(data = Q, aes(x=new_date))+geom_histogram()
+ggplot(Q, aes(x=new_date))+geom_histogram(position="identity", alpha=0.5, color = "#d3ebcd", fill = "#377d71")+xlab("Location")+ylab("Visit frequency")
+```
+
+
+ We can also try to see this trand on a stacked graphic with all the data, but separate the data from the agglo variable
+ 
+```{r}
+Q_Paris <-filter(Q, agglo == "Paris")
+
+```
+ 
+```{r}
+min <- as.Date("2012-1-1")
+max <- max(Q_Paris$new_date)
+ggplot(data = Q_Paris, aes(x=new_date,  color=zipcode))+ geom_density(alpha = 0.2)+
+  scale_x_date(date_labels="%Y-%b") + theme(legend.position="right") + scale_x_date(limits=c(min, max))
+```
+min <- as.Date("2002-1-1")
+max <- max(economics$date)
+dp+ scale_x_date(limits = c(min, max))
+
+```{r}
+#install.packages("ggridges")
+library(ggridges)
+theme_set(theme_ridges())
+```
+
+
+```{r}
+ggplot(data = Q_Paris, aes(x=new_date, y= zipcode, fill=stat(x)))+geom_density_ridges_gradient(scale = 3, rel_min_height = 0.01)+scale_fill_viridis_c(name="Dates visits", option="C") + scale_x_date(limits=c(min, max))
+```
+We can also make a density ridge visual to see how the frequency of visits varies in each zipcode over time. We have removed 2010-2012 that have very little data. 
+
+
+## Relationship between price and amenities
+In order to provide this visual, we need to transform this column first, as it contains several information wrapped up in a single column. We will add our data to a new dataframe named Q3.
+
+```{r}
+A <-str_split_fixed(L$amenities,c("\\{"),n=Inf )
+Q3 <-  data.frame(L$id,L$host_id,L$zipcode,L$agglo, A[,2],L$new_price)
+Q3 <- filter(Q3, L.agglo %in% c("Paris", "Suburbs"))
+Q3 <- rename(Q3,"Amenities"="A...2.")
+Q3 <- separate_rows(Q3, Amenities, sep="\\,")
+Q3$Amenities <-gsub("}","",as.character(Q3$Amenities))
+
+```
+
+How many unique amenities do we have? We have 44
+```{r}
+unique(Q3$Amenities)
+```
+
+Let's see how many times each of them are mentionned
+```{r}
+count = sort(table(Q3$Amenities), decreasing=TRUE)
+barplot(count)
+```
+
+```{r}
+Q3 %>% count(Amenities, sort = TRUE)
+```
+
+We see that we could clean the data by replacing "Wireless Internet" with internet and TV with Cable TV since they are basically the same thing but it seems they sometimes appear both in the same listing, so it would count this amenity twice for a single listing and that would skew our data. 
+So we decide to let the data as is.
+
+```{r}
+my_groups = group_by(Q3,Amenities, L.agglo)
+mysum = summarise(my_groups,
+                  price_mean = mean(L.new_price,na.rm=TRUE),
+                  price_sd = sd(L.new_price, na.rm=TRUE))
+
+ggplot(mysum) +
+  geom_point(aes(x=Amenities,y=price_mean, color =L.agglo ))+geom_smooth(mapping=aes(x=Amenities, y=price_mean),method="lm")+guides(x = guide_axis(angle = 90))
+
+```
+We can see through the standard deviation that some amenities make a strong difference in the price variation, for example the presence of a gym, a pool or air conditioning. 
+
+```{r}
+head(q3)
+```
+
